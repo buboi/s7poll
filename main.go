@@ -11,7 +11,7 @@ import (
 	"time"
 	"unsafe"
 
-	snap7 "github.com/buboi/snap7-go"
+	gos7 "github.com/robinson/gos7"
 )
 
 type connOptions struct {
@@ -27,6 +27,22 @@ type areaOptions struct {
 	db     int
 	start  int
 	amount int
+}
+
+type closeHandler interface {
+	Close() error
+}
+
+type plcClient struct {
+	Client  gos7.Client
+	handler closeHandler
+}
+
+func (c *plcClient) Close() {
+	if c == nil || c.handler == nil {
+		return
+	}
+	_ = c.handler.Close()
 }
 
 func main() {
@@ -64,13 +80,13 @@ func runRead(args []string) error {
 		return err
 	}
 
-	client, err := connect(conn)
+	plc, err := connect(conn)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer plc.Close()
 
-	data, err := readArea(client, area)
+	data, err := readArea(plc.Client, area)
 	if err != nil {
 		return err
 	}
@@ -94,15 +110,15 @@ func runPoll(args []string) error {
 		return err
 	}
 
-	client, err := connect(conn)
+	plc, err := connect(conn)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer plc.Close()
 
 	i := 0
 	for {
-		data, err := readArea(client, area)
+		data, err := readArea(plc.Client, area)
 		if err != nil {
 			return err
 		}
@@ -138,13 +154,13 @@ func runWrite(args []string) error {
 		return err
 	}
 
-	client, err := connect(conn)
+	plc, err := connect(conn)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer plc.Close()
 
-	return writeArea(client, area, payload)
+	return writeArea(plc.Client, area, payload)
 }
 
 func addConnFlags(fs *flag.FlagSet) *connOptions {
@@ -166,50 +182,62 @@ func addAreaFlags(fs *flag.FlagSet) *areaOptions {
 	return opts
 }
 
-func connect(opts *connOptions) (*snap7.Snap7Client, error) {
-	return connectWithPort(opts)
+func connect(opts *connOptions) (*plcClient, error) {
+	address := opts.address
+	if !strings.Contains(address, ":") && opts.port > 0 {
+		address = fmt.Sprintf("%s:%d", address, opts.port)
+	}
+
+	var handler *gos7.TCPClientHandler
+	if opts.ctype > 0 {
+		handler = gos7.NewTCPClientHandlerWithConnectType(address, opts.rack, opts.slot, int(opts.ctype))
+	} else {
+		handler = gos7.NewTCPClientHandler(address, opts.rack, opts.slot)
+	}
+
+	if err := handler.Connect(); err != nil {
+		return nil, err
+	}
+
+	return &plcClient{
+		Client:  gos7.NewClient(handler),
+		handler: handler,
+	}, nil
 }
 
-func readArea(client *snap7.Snap7Client, area *areaOptions) ([]byte, error) {
-	code, err := resolveArea(area.area)
+func readArea(client gos7.Client, area *areaOptions) ([]byte, error) {
+	buf := make([]byte, area.amount)
+	var err error
+	switch strings.ToUpper(area.area) {
+	case "DB":
+		err = client.AGReadDB(area.db, area.start, area.amount, buf)
+	case "PE", "I", "INPUT":
+		err = client.AGReadEB(area.start, area.amount, buf)
+	case "PA", "Q", "OUTPUT":
+		err = client.AGReadAB(area.start, area.amount, buf)
+	case "MK", "M", "MERKER":
+		err = client.AGReadMB(area.start, area.amount, buf)
+	default:
+		return nil, fmt.Errorf("area %q not supported", area.area)
+	}
 	if err != nil {
 		return nil, err
 	}
-	dbNumber := area.db
-	if strings.ToUpper(area.area) != "DB" {
-		dbNumber = 0
-	}
-	return client.ReadArea(code, dbNumber, area.start, area.amount)
+	return buf, nil
 }
 
-func writeArea(client *snap7.Snap7Client, area *areaOptions, data []byte) error {
-	code, err := resolveArea(area.area)
-	if err != nil {
-		return err
-	}
-	dbNumber := area.db
-	if strings.ToUpper(area.area) != "DB" {
-		dbNumber = 0
-	}
-	return client.WriteArea(code, dbNumber, area.start, data)
-}
-
-func resolveArea(area string) (int, error) {
-	switch strings.ToUpper(area) {
-	case "PE", "I", "INPUT":
-		return snap7.S7AreaPE, nil
-	case "PA", "Q", "OUTPUT":
-		return snap7.S7AreaPA, nil
-	case "MK", "M", "MERKER":
-		return snap7.S7AreaMK, nil
+func writeArea(client gos7.Client, area *areaOptions, data []byte) error {
+	switch strings.ToUpper(area.area) {
 	case "DB":
-		return snap7.S7AreaDB, nil
-	case "TM", "T", "TIMER":
-		return snap7.S7AreaTM, nil
-	case "CT", "C", "COUNTER":
-		return snap7.S7AreaCT, nil
+		return client.AGWriteDB(area.db, area.start, len(data), data)
+	case "PE", "I", "INPUT":
+		return client.AGWriteEB(area.start, len(data), data)
+	case "PA", "Q", "OUTPUT":
+		return client.AGWriteAB(area.start, len(data), data)
+	case "MK", "M", "MERKER":
+		return client.AGWriteMB(area.start, len(data), data)
 	default:
-		return 0, fmt.Errorf("unknown area %q", area)
+		return fmt.Errorf("area %q not supported", area.area)
 	}
 }
 
