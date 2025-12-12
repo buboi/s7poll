@@ -11,7 +11,7 @@ import (
 	"time"
 	"unsafe"
 
-	snap7 "github.com/danclive/snap7-go"
+	snap7 "github.com/buboi/snap7-go"
 )
 
 type connOptions struct {
