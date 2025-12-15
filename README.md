@@ -1,11 +1,10 @@
 # s7poll
 
-Simple CLI, similar to modpoll, for reading/writing Siemens S7 PLC areas using [`github.com/danclive/snap7-go`](https://github.com/danclive/snap7-go).
+Simple CLI, similar to modpoll, for reading/writing Siemens S7 PLC areas using the pure Go [`github.com/robinson/gos7`](https://github.com/robinson/gos7) library.
 
 ## Prerequisites
 
 - Go 1.22+
-- Native Snap7 library installed and discoverable by the linker (e.g. `libsnap7.so` on Linux). See the upstream snap7 docs for install/build steps.
 
 ## Build
 
